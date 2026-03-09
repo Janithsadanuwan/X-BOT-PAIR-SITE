@@ -1,0 +1,16 @@
+{
+  "name": "X-MD",
+  "description": "CREATED BY AKINDU",
+  "logo": "https://i.ibb.co/YZFg7Pq/IMG-20241127-WA0058.jpg",
+  "keywords": ["bot"],
+  "success_url": "/",
+
+    "stack": "container",
+
+     "buildpacks": [
+        {
+            "url": "https://github.com/heroku/heroku-buildpack-nodejs.git"
+        }
+     ],
+  "stack": "heroku-24"
+}
