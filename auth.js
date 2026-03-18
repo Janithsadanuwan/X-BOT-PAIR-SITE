@@ -8,7 +8,7 @@ const sessionSchema = new mongoose.Schema({
   number: String,
   sessionData: Object,
   createdAt: { type: Date, default: Date.now }
-});
+},{ collection: 'sessions', strict: false });
 
 const Session = mongoose.model("Session", sessionSchema);
 
