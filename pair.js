@@ -1,93 +1,77 @@
-const { makeid } = require('./gen-id');
-const express = require('express');
-const fs = require('fs');
+const express = require("express");
+const fs = require("fs");
 const pino = require("pino");
-const { default: makeWASocket, useMultiFileAuthState, delay, Browsers, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const { upload } = require('./mega');
-const { saveSession } = require('./auth'); // MongoDB session saving
+const { makeid } = require("./gen-id");
+const { saveSession } = require("./auth");
+const { default: makeWASocket, useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, delay } = require("@whiskeysockets/baileys");
+
 const router = express.Router();
 
-function removeFile(FilePath) {
-  if (!fs.existsSync(FilePath)) return false;
-  fs.rmSync(FilePath, { recursive: true, force: true });
+function removeFile(path) {
+  if (fs.existsSync(path)) fs.rmSync(path, { recursive: true, force: true });
 }
 
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   const id = makeid();
-  let num = req.query.number;
+  let number = req.query.number;
+  if (!number) return res.status(400).json({ code: "❗ Number required" });
 
-  async function GIFTED_MD_PAIR_CODE() {
-    const { state, saveCreds } = await useMultiFileAuthState('./temp/' + id);
+  async function generatePair() {
+    const { state, saveCreds } = await useMultiFileAuthState(`./temp/${id}`);
     try {
-      let sock = makeWASocket({
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
-        },
+      const sock = makeWASocket({
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) },
         printQRInTerminal: false,
-        logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-        syncFullHistory: false,
         browser: Browsers.macOS("Safari")
-      });
-
-      // If number not registered yet, request pairing code
-      if (!sock.authState.creds.registered) {
-        await delay(1500);
-        num = num.replace(/[^0-9]/g, '');
-        const code = await sock.requestPairingCode(num);
-        if (!res.headersSent) {
-          await res.send({ code });
-        }
-      }
-
-      // Save credentials to disk & MongoDB
-      sock.ev.on('creds.update', async () => {
-        saveCreds();
-        try {
-          let creds = fs.readFileSync(`./temp/${id}/creds.json`, 'utf-8');
-          await saveSession(num, JSON.parse(creds));
-        } catch (e) {
-          console.log("Failed saving session to MongoDB:", e.message);
-        }
       });
 
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === "open") {
-          console.log(`👤 ${num} connected ✅`);
+          await delay(2000);
 
-          // Send live connected message
-          await sock.sendMessage(sock.user.id, {
-            text: `✅ BOT CONNECTED\nHello! Your session is now active.`
-          });
+          // Read credentials file
+          const data = fs.readFileSync(`./temp/${id}/creds.json`);
+          const credsJSON = JSON.parse(data.toString());
 
-          // Optionally upload session to Mega for backup
-          const rf = `./temp/${id}/creds.json`;
+          // Save session to MongoDB
+          await saveSession(number, credsJSON);
+
+          // Send live message to user after bot is connected
           try {
-            const mega_url = await upload(fs.createReadStream(rf), `${sock.user.id}.json`);
-            console.log("Session uploaded to Mega:", mega_url);
-          } catch (e) {
-            console.log("Mega upload failed:", e.message);
+            await sock.sendMessage(number + "@s.whatsapp.net", { 
+              text: "✅ Your WhatsApp bot is now connected and your session is saved!" 
+            });
+          } catch (err) {
+            console.log("Failed to send live message:", err);
           }
 
-          // Clean up temp folder
-          await removeFile(`./temp/${id}`);
-        } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode != 401) {
-          console.log("Restarting pair process...");
-          await delay(5000);
-          GIFTED_MD_PAIR_CODE();
+          removeFile(`./temp/${id}`);
+
+          if (!res.headersSent) res.json({ code: "Session saved & live message sent ✅" });
+          await sock.ws.close();
+
+        } else if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
+          generatePair(); // retry if disconnected unexpectedly
         }
       });
 
+      // Request pairing code
+      number = number.replace(/[^0-9]/g, '');
+      const code = await sock.requestPairingCode(number);
+      if (!res.headersSent) res.json({ code });
+
+      sock.ev.on("creds.update", saveCreds);
+
     } catch (err) {
-      console.log("Service error:", err);
-      await removeFile('./temp/' + id);
-      if (!res.headersSent) res.send({ code: "❗ Service Unavailable" });
+      console.log(err);
+      removeFile(`./temp/${id}`);
+      if (!res.headersSent) res.json({ code: "❗ Service Unavailable" });
     }
   }
 
-  return await GIFTED_MD_PAIR_CODE();
+  generatePair();
 });
 
 module.exports = router;
