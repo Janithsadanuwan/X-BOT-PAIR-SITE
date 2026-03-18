@@ -2,8 +2,14 @@ const express = require("express");
 const fs = require("fs");
 const pino = require("pino");
 const { makeid } = require("./gen-id");
-const { saveSession } = require("./auth");
-const { default: makeWASocket, useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, delay } = require("@whiskeysockets/baileys");
+const { saveSession } = require("./auth"); // your Mongo save function
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  Browsers,
+  makeCacheableSignalKeyStore,
+  delay
+} = require("@whiskeysockets/baileys");
 
 const router = express.Router();
 
@@ -25,49 +31,46 @@ router.get("/", async (req, res) => {
         browser: Browsers.macOS("Safari")
       });
 
+      sock.ev.on("creds.update", saveCreds);
+
       sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === "open") {
+          console.log(`✅ WhatsApp connected for ${number}`);
           await delay(2000);
 
-          // Read credentials file
-          const data = fs.readFileSync(`./temp/${id}/creds.json`);
-          const credsJSON = JSON.parse(data.toString());
+          // Read creds and save to Mongo
+          const credsPath = `./temp/${id}/creds.json`;
+          const data = fs.readFileSync(credsPath, "utf-8");
+          await saveSession(number, JSON.parse(data));
 
-          // Save session to MongoDB
-          await saveSession(number, credsJSON);
-
-          // Send live message to user after bot is connected
-          try {
-            await sock.sendMessage(number + "@s.whatsapp.net", { 
-              text: "✅ Your WhatsApp bot is now connected and your session is saved!" 
-            });
-          } catch (err) {
-            console.log("Failed to send live message:", err);
-          }
+          // Send a live message to the user
+          await sock.sendMessage(number + "@s.whatsapp.net", {
+            text: "✅ Your WhatsApp bot is now connected and session saved!"
+          });
 
           removeFile(`./temp/${id}`);
+          if (!res.headersSent) res.json({ code: "Session saved to DB ✅" });
 
-          if (!res.headersSent) res.json({ code: "Session saved & live message sent ✅" });
           await sock.ws.close();
-
         } else if (connection === "close" && lastDisconnect?.error?.output?.statusCode !== 401) {
-          generatePair(); // retry if disconnected unexpectedly
+          console.log("🔄 Connection closed unexpectedly, retrying...");
+          generatePair();
         }
       });
 
-      // Request pairing code
-      number = number.replace(/[^0-9]/g, '');
+      // Wait a bit and request pairing code
+      await delay(1000);
+      number = number.replace(/[^0-9]/g, "");
       const code = await sock.requestPairingCode(number);
+      console.log(`📨 Pairing code sent to ${number}`);
       if (!res.headersSent) res.json({ code });
 
-      sock.ev.on("creds.update", saveCreds);
-
     } catch (err) {
-      console.log(err);
+      console.error("❌ Pairing Error:", err);
       removeFile(`./temp/${id}`);
-      if (!res.headersSent) res.json({ code: "❗ Service Unavailable" });
+      if (!res.headersSent) res.json({ code: `❗ Service Unavailable: ${err.message}` });
     }
   }
 
